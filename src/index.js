@@ -31,6 +31,8 @@ const image = src => `
 </html>
 `;
 
+const type = typeName => object => object.types.includes(typeName);
+
 const app = express();
 
 app.use(express.static('public'));
@@ -46,7 +48,6 @@ app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
   const reverse = StreetView.reverse({ latitude, longitude });
   const result = await fetch(reverse);
   const json = await result.json();
-  const type = typeName => x => x.types.includes(typeName);
   const find = (object, propertyName) => object.find(type(propertyName));
   const streetAddress = find(json.results, 'street_address');
   const { address_components: address } = streetAddress;
@@ -119,7 +120,7 @@ app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
   const simplified = simplify(segments.map(arrayToPoint), 1, true).map(
     pointToArray,
   );
-  console.log(simplified);
+  dir(simplified);
   const { width, height } = new BBOX(...simplified);
   const w = Math.ceil(width);
   const h = Math.ceil(height);
