@@ -1,11 +1,12 @@
-import paper from 'paper-jsdom-canvas';
+// import paper from 'paper-jsdom-canvas';
+import Canvas from 'canvas';
 import simplify from 'simplify-js';
 import express from 'express';
 import fetch from 'node-fetch';
 import chalk from 'chalk';
 
-import { PORT } from './constants';
 import StreetView from './StreetView';
+import { PORT } from './constants';
 import BBOX from './BBOX';
 import CRAB from './CRAB';
 import WMS from './WMS';
@@ -124,13 +125,20 @@ app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
   const { width, height } = new BBOX(...simplified);
   const w = Math.ceil(width);
   const h = Math.ceil(height);
-  const canvas = paper.createCanvas(w, h);
-  paper.setup(canvas);
-  const path = new paper.Path({
-    segments /* : simplified*/,
-    strokeColor: 'black',
-    // fullySelected: true,
+  // const canvas = paper.createCanvas(w, h);
+  const canvas = new Canvas(w, h);
+  // paper.setup(canvas);
+  // const path = new paper.Path({
+  // segments /* : simplified*/,
+  // strokeColor: 'black',
+  // fullySelected: true,
+  // });
+  const ctx = canvas.getContext('2d');
+  ctx.beginPath();
+  segments.forEach((point, index) => {
+    ctx[index === 0 ? 'moveTo' : 'lineTo'](point[0], point[1]);
   });
+  ctx.stroke();
   // path.flatten(0.025);
   console.log(
     `${segments.length - 1} points => ${simplified.length - 1} points`,
@@ -138,7 +146,7 @@ app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
   /* const start = new paper.Point(100, 100);
   path.moveTo(start);
   path.lineTo(start.add([200,-50]));*/
-  paper.view.draw();
+  // paper.view.draw();
   res.send(image(canvas.toDataURL()));
 });
 
