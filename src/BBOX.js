@@ -18,15 +18,17 @@ class BBOX {
   add(points) {
     points.forEach(([x, y]) => {
       const { min, max } = this;
-      this.min = {
-        x: Math.min(x, min.x),
-        y: Math.min(y, min.y),
-      };
-      this.max = {
-        x: Math.max(x, max.x),
-        y: Math.max(y, max.y),
-      };
+      this.min = { x: Math.min(x, min.x), y: Math.min(y, min.y) };
+      this.max = { x: Math.max(x, max.x), y: Math.max(y, max.y) };
     });
+    0;
+  }
+
+  grow(amount) {
+    this.min.x -= amount;
+    this.min.y -= amount;
+    this.max.x += amount;
+    this.max.y += amount;
   }
 
   toString() {
