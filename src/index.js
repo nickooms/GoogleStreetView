@@ -1,4 +1,3 @@
-// import paper from 'paper-jsdom-canvas';
 import Canvas from 'canvas';
 import simplify from 'simplify-js';
 import express from 'express';
@@ -24,15 +23,73 @@ const getPano = id =>
     fov: 60,
   });
 
-const image = src => `
+const image = src => `<img src="${src}">`;
+
+const images = (...sources) => sources.map(image).join('');
+
+const html = (...children) => `
 <html>
-  <body style="margin: 0px;">
-    <img src="${src}">
+  <head>
+    <style>
+      body {
+        margin: 0px;
+      }
+      
+      img {
+        border: 1px solid #CCC;
+        margin: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    ${children}
   </body>
 </html>
 `;
 
 const type = typeName => object => object.types.includes(typeName);
+
+const drawPolygon = polygon => {
+  const { width, height } = new BBOX(...polygon);
+  const canvas = new Canvas(width, height);
+  const context = canvas.getContext('2d');
+  const moveOrLineTo = ([x, y], index) =>
+    context[index === 0 ? 'moveTo' : 'lineTo'](x, y);
+  context.beginPath();
+  polygon.forEach(moveOrLineTo);
+  context.stroke();
+  return canvas;
+};
+
+const drawCirle = ({ context, radius = 1, color = '#F00' }) => (x, y) => {
+  context.fillStyle = color;
+  context.lineWidth = 1;
+  context.strokeStyle = color;
+  context.beginPath();
+  context.arc(x, y, radius, 0, 2 * Math.PI);
+  context.fill();
+};
+
+const drawPoints = points => {
+  const { width, height } = new BBOX(...points);
+  const canvas = new Canvas(width, height);
+  const drawPoint = drawCirle({ context: canvas.getContext('2d') });
+  points.forEach(([x, y]) => drawPoint(x, y));
+  return canvas;
+};
+
+const getImageData = canvas => {
+  const { width, height } = canvas;
+  return canvas.getContext('2d').getImageData(0, 0, width, height);
+};
+
+const subtract = point => ([x, y]) => [x - point.x, y - point.y];
+
+const multiply = factor => ([x, y]) => [x * factor, y * factor];
+
+const arrayToPoint = ([x, y]) => ({ x, y });
+
+const pointToArray = ({ x, y }) => [x, y];
 
 const app = express();
 
@@ -40,12 +97,6 @@ app.use(express.static('public'));
 
 app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
   const [longitude, latitude] = lonLat.split(',').map(parseFloat);
-  // const location = { longitude, latitude };
-  // let src = StreetView.url(location);
-  // const metadata = StreetView.metadata(location);
-  // let result = await fetch(metadata);
-  // let json = await result.json();
-  // const src = json.pano_id ? getPano(json.pano_id) : StreetView.url(location);
   const reverse = StreetView.reverse({ latitude, longitude });
   const result = await fetch(reverse);
   const json = await result.json();
@@ -76,78 +127,40 @@ app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
   );
   const x = parseFloat(CenterX.replace(',', '.'));
   const y = parseFloat(CenterY.replace(',', '.'));
-  const layers = ['GRB_ADP', 'GRB_GBG'];
   const featuresUrl = WMS.getFeatureInfo({
     bbox: [x - 1, y - 1, x + 1, y + 1].join(','),
-    layers,
+    layers: ['GRB_ADP'],
   });
   const featuresResponse = await fetch(featuresUrl);
   const { features } = await featuresResponse.json();
   const [feature] = features;
   const { coordinates: [outer] } = feature.geometry;
-  // const { viewport: { northeast, southwest } } = geometry;
-  /// const lat = [northeast.lat, southwest.lat];
-  // const lng = [northeast.lng, southwest.lng];
-  // const min = { x: Math.min(...lat), y: Math.min(...lng) };
-  // const max = { x: Math.max(...lat), y: Math.max(...lng) };
-  // const bbox = [min.x, min.y, max.x, max.y].join(',');
-  /* const list = {
-    x: outer.map(([x]) => x),
-    y: outer.map(([x, y]) => y),
-  };
-  const min = {
-    x: Math.min(...list.x),
-    y: Math.min(...list.y),
-  };
-  const max = {
-    x: Math.max(...list.x),
-    y: Math.max(...list.y),
-  };*/
   const bbox = new BBOX(...outer);
-  // const url = WMS.getMap({ bbox: bbox.toString(), layers });
-  // res.send(image(url));
-  /* const segments = [
-    new paper.Point(100, 100),
-    new paper.Point(200, 200),
-  ];*/
-  // dir(outer);
-  // dir(bbox);
-  const subtract = point => ([x, y]) => [x - point.x, y - point.y];
-  const multiply = factor => ([x, y]) => [x * factor, y * factor];
   const segments = outer.map(subtract(bbox.min)).map(multiply(10));
-  // console.log(segments);
-  const arrayToPoint = ([x, y]) => ({ x, y });
-  const pointToArray = ({ x, y }) => [x, y];
   const simplified = simplify(segments.map(arrayToPoint), 1, true).map(
     pointToArray,
   );
-  dir(simplified);
-  const { width, height } = new BBOX(...simplified);
-  const w = Math.ceil(width);
-  const h = Math.ceil(height);
-  // const canvas = paper.createCanvas(w, h);
-  const canvas = new Canvas(w, h);
-  // paper.setup(canvas);
-  // const path = new paper.Path({
-  // segments /* : simplified*/,
-  // strokeColor: 'black',
-  // fullySelected: true,
-  // });
-  const ctx = canvas.getContext('2d');
-  ctx.beginPath();
-  segments.forEach((point, index) => {
-    ctx[index === 0 ? 'moveTo' : 'lineTo'](point[0], point[1]);
-  });
-  ctx.stroke();
-  // path.flatten(0.025);
+  const canvas = drawPolygon(segments);
+  const imageData = getImageData(canvas);
+  const data = new Uint32Array(imageData.data.buffer);
+  const canvasSimplified = drawPolygon(simplified);
+  const imageDataSimplified = getImageData(canvasSimplified);
+  const dataSimplified = new Uint32Array(imageData.data.buffer);
+  data.forEach(
+    (x, index) => (data[index] = x === dataSimplified[index] ? 0 : 0xff0000ff),
+  );
+  // canvas.getContext('2d').putImageData(imageData, 0, 0);
   console.log(
     `${segments.length - 1} points => ${simplified.length - 1} points`,
   );
-  /* const start = new paper.Point(100, 100);
-  path.moveTo(start);
-  path.lineTo(start.add([200,-50]));*/
-  // paper.view.draw();
-  res.send(image(canvas.toDataURL()));
+  res.send(
+    html(
+      images(
+        drawPoints(segments).toDataURL(),
+        drawPoints(simplified).toDataURL(),
+      ),
+    ),
+  );
 });
 
 app.listen(PORT, () => {
