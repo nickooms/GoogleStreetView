@@ -5,18 +5,29 @@ import fs from 'fs';
 import Cache from '../src/Cache';
 
 const mkdir = util.promisify(fs.mkdir);
+const exists = util.promisify(fs.exists);
+
+const getCache = () => new Cache('cache', 'test');
 
 describe('Cache', () => {
   before(async () => {
-    await mkdir('cache');
+    if (!await exists('cache')) await mkdir('cache');
   });
 
   it('should initialize', done => {
-    const cache = new Cache('cache', 'test');
-    console.log(cache);
-    /* http.get(URL, res => {
-      assert.equal(200, res.statusCode);
-      done();
-    });*/
+    getCache();
+    done();
+  });
+
+  it('should set items', done => {
+    const cache = getCache();
+    cache.set('test-key', 'test-value');
+    done();
+  });
+
+  it('should get items', done => {
+    const cache = getCache();
+    assert.equal(cache.get('test-key'), 'test-value');
+    done();
   });
 });

@@ -15,6 +15,13 @@ class BBOX {
     return this.max.y - this.min.y;
   }
 
+  get center() {
+    return {
+      x: (this.min.x + this.max.x) / 2,
+      y: (this.min.y + this.max.y) / 2,
+    };
+  }
+
   add(points) {
     points.forEach(([x, y]) => {
       const { min, max } = this;

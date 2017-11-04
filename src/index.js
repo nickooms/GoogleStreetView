@@ -3,12 +3,21 @@ import simplify from 'simplify-js';
 import express from 'express';
 import fetch from 'node-fetch';
 import chalk from 'chalk';
+import NP from 'number-precision';
 
 import StreetView from './StreetView';
+import GeoLocation from './GeoLocation';
 import { PORT } from './constants';
 import BBOX from './BBOX';
 import CRAB from './CRAB';
+import City from './City';
+import Street from './Street';
+import Housenumber from './Housenumber';
+import Plot from './Plot';
+import Buildings from './Buildings';
+import Building from './Building';
 import WMS from './WMS';
+import { flatten } from './util';
 
 const dir = object => {
   console.dir(object, { colors: true, depth: null });
@@ -37,7 +46,8 @@ const html = (...children) => `
       
       img {
         border: 1px solid #CCC;
-        margin: 4px;
+        margin: 0px;
+        width: 49%;
       }
     </style>
   </head>
@@ -46,8 +56,6 @@ const html = (...children) => `
   </body>
 </html>
 `;
-
-const type = typeName => object => object.types.includes(typeName);
 
 const drawPolygon = polygon => {
   const { width, height } = new BBOX(...polygon);
@@ -73,8 +81,23 @@ const drawCirle = ({ context, radius = 1, color = '#F00' }) => (x, y) => {
 const drawPoints = points => {
   const { width, height } = new BBOX(...points);
   const canvas = new Canvas(width, height);
-  const drawPoint = drawCirle({ context: canvas.getContext('2d') });
+  const context = canvas.getContext('2d');
+  const drawPoint = drawCirle({ context, radius: 5 });
   points.forEach(([x, y]) => drawPoint(x, y));
+  return canvas;
+};
+
+const draw = polygon => {
+  const { width, height } = new BBOX(...polygon);
+  const canvas = new Canvas(width, height);
+  const context = canvas.getContext('2d');
+  const drawPoint = drawCirle({ context, radius: 5 });
+  const moveOrLineTo = ([x, y], index) =>
+    context[index === 0 ? 'moveTo' : 'lineTo'](x, y);
+  context.beginPath();
+  polygon.forEach(moveOrLineTo);
+  context.stroke();
+  polygon.forEach(([x, y]) => drawPoint(x, y));
   return canvas;
 };
 
@@ -82,6 +105,8 @@ const getImageData = canvas => {
   const { width, height } = canvas;
   return canvas.getContext('2d').getImageData(0, 0, width, height);
 };
+
+const add = point => ([x, y]) => [x + point.x, y + point.y];
 
 const subtract = point => ([x, y]) => [x - point.x, y - point.y];
 
@@ -91,55 +116,14 @@ const arrayToPoint = ([x, y]) => ({ x, y });
 
 const pointToArray = ({ x, y }) => [x, y];
 
-const app = express();
+const roundPoint = ([x, y]) => [NP.round(x, 3), NP.round(y, 3)];
 
-app.use(express.static('public'));
-
-app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
-  const [longitude, latitude] = lonLat.split(',').map(parseFloat);
-  const reverse = StreetView.reverse({ latitude, longitude });
-  const result = await fetch(reverse);
-  const json = await result.json();
-  const find = (object, propertyName) => object.find(type(propertyName));
-  const streetAddress = find(json.results, 'street_address');
-  const { address_components: address } = streetAddress;
-  const huisnummers = find(address, 'street_number').long_name;
-  const Straatnaam = find(address, 'route').long_name;
-  const PostkantonCode = find(address, 'postal_code').long_name;
-  const Huisnummer = huisnummers.split('-')[0];
-  const [{ GemeenteId }] = await CRAB('FindGemeentenByPostkanton', {
-    PostkantonCode,
-  });
-  const [{ StraatnaamId }] = await CRAB('FindStraatnamen', {
-    Straatnaam,
-    GemeenteId,
-  });
-  const [{ HuisnummerId }] = await CRAB('FindHuisnummers', {
-    Huisnummer,
-    StraatnaamId,
-  });
-  const [{ IdentificatorPerceel }] = await CRAB('ListPercelenByHuisnummerId', {
-    HuisnummerId,
-  });
-  const [{ CenterX, CenterY }] = await CRAB(
-    'GetPerceelByIdentificatorPerceel',
-    { IdentificatorPerceel },
-  );
-  const x = parseFloat(CenterX.replace(',', '.'));
-  const y = parseFloat(CenterY.replace(',', '.'));
-  const featuresUrl = WMS.getFeatureInfo({
-    bbox: [x - 1, y - 1, x + 1, y + 1].join(','),
-    layers: ['GRB_ADP'],
-  });
-  const featuresResponse = await fetch(featuresUrl);
-  const { features } = await featuresResponse.json();
-  const [feature] = features;
-  const { coordinates: [outer] } = feature.geometry;
-  const bbox = new BBOX(...outer);
-  const segments = outer.map(subtract(bbox.min)).map(multiply(10));
-  const simplified = simplify(segments.map(arrayToPoint), 1, true).map(
-    pointToArray,
-  );
+const simplifyPolygon = polygon => {
+  const bbox = new BBOX(...polygon);
+  const segments = polygon.map(subtract(bbox.min)).map(multiply(10));
+  const simplified = simplify(segments.map(arrayToPoint), 1, true)
+    .map(pointToArray)
+    .map(roundPoint);
   const canvas = drawPolygon(segments);
   const imageData = getImageData(canvas);
   const data = new Uint32Array(imageData.data.buffer);
@@ -149,18 +133,111 @@ app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
   data.forEach(
     (x, index) => (data[index] = x === dataSimplified[index] ? 0 : 0xff0000ff),
   );
-  // canvas.getContext('2d').putImageData(imageData, 0, 0);
-  console.log(
+  /* console.log(
     `${segments.length - 1} points => ${simplified.length - 1} points`,
+  );*/
+  return {
+    bbox,
+    segments: segments.map(multiply(1 / 10)).map(add(bbox.min)),
+    simplified: simplified.map(multiply(1 / 10)).map(add(bbox.min)),
+  };
+};
+
+const app = express();
+
+app.use(express.static('public'));
+
+app.get('/location/:lonLat', async ({ params: { lonLat } }, res) => {
+  const time = new Date().getTime();
+  const [longitude, latitude] = lonLat.split(',').map(parseFloat);
+  const reverse = await GeoLocation.reverse({ latitude, longitude });
+  // const number = reverse.housenumbers[0];
+  const [city] = await City.find(reverse.zip);
+  const street = await city.street(reverse.street);
+  // const [street] = await Street.byName(reverse.street, city.id);
+  const imageList = [];
+  // const housenumbers = await street.housenumbers();
+  // const housenumberIds = housenumbers.map(({ id }) => id)
+  // dir(housenumbers.length);
+  const buildings = await street.buildings();
+  // dir(buildings.length);
+  const simplified = flatten(
+    buildings.map(building => {
+      const { bbox, segments, simplified } = simplifyPolygon(building.geometry);
+      // imageList.push(draw(segments).toDataURL());
+      // imageList.push(draw(simplified).toDataURL());
+      return { bbox, segments, simplified };
+    }),
   );
-  res.send(
-    html(
-      images(
-        drawPoints(segments).toDataURL(),
-        drawPoints(simplified).toDataURL(),
-      ),
-    ),
-  );
+
+  // dir({ simplified });
+  // const points = flatten(simplified.map(({ simplified }) => simplified));
+  const points = flatten(buildings.map(x => x.geometry));
+  // dir({ points });
+  const bbox = new BBOX(...points);
+  dir({ bbox });
+
+  const svg = ({ width, height, viewBox, children }) => `
+<svg viewBox="${viewBox}">
+  <style>
+    polygon {
+      stroke: black;
+      stroke-width: 0.1;
+      fill: none;
+    }
+
+    text {
+      font-size: 3px;
+    }
+  </style>
+  ${children.join('\n')}
+</svg>
+  `;
+  const { min, width, height } = bbox;
+  res.send(svg({
+    width,
+    height,
+    viewBox: `${min.x} ${min.y} ${width} ${height}`,
+    children: simplified.map((building, index) => {
+      const points = building.simplified
+        .map(point => point.join(',')).join(' ');
+      const x = building.bbox.center.x;
+      const y = building.bbox.center.y;
+      const text = buildings[index].number;
+      return ` <polygon points="${points}" />
+  <text x="${x}" y="${y}">${text}</text>`;
+    }),
+  }));
+  // const bbox = new BBOX(...flatten(buildings.map(x => x.geometry)));
+  // dir(bbox);
+  /* const a = await Promise.all(
+    housenumbers.map(x => x.number).map(async number => {
+      console.log('number:', number);
+      const [housenumber] = await Housenumber.byNumber(number, street.id);
+      console.log('housenumber:', housenumber);
+      const [plot] = await Plot.byHousenumberId(housenumber.id);
+      console.log('plot:', plot);
+      const buildingIds = await Buildings.byHousenumberId(housenumber.id);
+      console.log('buildingIds:', buildingIds);
+      const [[building]] = await Promise.all(
+        buildingIds.map(async ({ id }) => await Building.byId(id)),
+      );
+      const [{ center: { x, y } }] = await Plot.byId(plot.id);
+      const features = await WMS.getFeatures({
+        bbox: [x - 1, y - 1, x + 1, y + 1].join(','),
+        layers: ['GRB_ADP'],
+      });
+      const [feature] = features;
+      const { coordinates: [outer] } = feature.geometry;
+      const { segments, simplified } = simplifyPolygon(building.geometry);
+      return [draw(segments).toDataURL(), draw(simplified).toDataURL()];
+      // imageList.push(draw(segments).toDataURL());
+      // imageList.push(draw(simplified).toDataURL());
+    }),
+  );*/
+  // console.log(a);
+  // res.send(html(images(...imageList)));
+  console.log(chalk.bold.cyan(`${new Date().getTime() - time} ms`));
 });
 
 app.listen(PORT, () => {

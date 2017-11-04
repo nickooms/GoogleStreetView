@@ -1,7 +1,15 @@
 import querystring from 'querystring';
 import fetch from 'node-fetch';
 
+import Cache from './Cache';
+
 const CRAB = async (operation, parameters) => {
+  const cache = await Cache.init('cache', 'CRAB', operation);
+  const key = Object.entries(parameters)
+    .map(([name, value]) => `${name}_${value}`)
+    .join('_');
+  const cached = cache.get(key);
+  if (cached) return cached;
   const URL = 'http://crab.agiv.be/Examples/Home/ExecOperation';
   const method = 'post';
   const headers = { 'Content-type': 'application/x-www-form-urlencoded' };
@@ -36,6 +44,7 @@ const CRAB = async (operation, parameters) => {
         .map(column),
     ),
   );
+  cache.set(key, items);
   return items;
 };
 

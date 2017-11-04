@@ -1,4 +1,5 @@
 import querystring from 'querystring';
+import fetch from 'node-fetch';
 
 const URL =
   'https://geoservices.informatievlaanderen.be/raadpleegdiensten/GRB/wms';
@@ -59,6 +60,12 @@ const WMS = {
     };
     const url = `${URL}?${querystring.stringify(parameters)}`;
     return url;
+  },
+  async getFeatures({ bbox, crs = CRS, layers = ['GRB_ADP'] }) {
+    const url = WMS.getFeatureInfo({ bbox, crs, layers });
+    const response = await fetch(url);
+    const { features } = await response.json();
+    return features;
   },
 };
 
